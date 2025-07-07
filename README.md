@@ -301,12 +301,8 @@ CMD ["npm", "start"]
 ```json
 {
   "mcpServers": {
-    "your-docs": {
-      "command": "node",
-      "args": ["/path/to/your/dist/index.js"],
-      "env": {
-        "GITBOOK_URL": "https://docs.yoursite.com"
-      }
+    "demos-sdk": {
+      "command": "demosdk-mcp-server"
     }
   }
 }
