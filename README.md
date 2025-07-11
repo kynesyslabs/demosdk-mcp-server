@@ -2,6 +2,19 @@
 
 An MCP (Model Context Protocol) server that provides access to the Demos Network SDK documentation. This server scrapes and indexes the Demos Network GitBook documentation, making it searchable and accessible through MCP tools for AI assistants.
 
+## Features
+
+- **Universal GitBook Support**: Works with any public GitBook site
+- **Smart Domain Detection**: Automatically detects and brands for your content
+- **Advanced Search**: Fuzzy search with stemming, normalization, and ranking
+- **Markdown Preservation**: Converts HTML to clean markdown with formatting preserved
+- **Code Block Extraction**: Syntax highlighting and language detection for code examples
+- **REST API**: HTTP endpoints alongside MCP for web integration
+- **Intelligent Caching**: Only re-scrapes changed content for performance
+- **Parallel Processing**: Fast scraping with configurable concurrency
+- **MCP Prompts**: Pre-built prompts for documentation workflows
+- **Respectful Scraping**: Rate limiting and error handling built-in
+
 ## Installation
 
 Run the installation script:
