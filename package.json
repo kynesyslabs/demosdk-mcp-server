@@ -1,10 +1,10 @@
 {
   "name": "demosdk-mcp-server",
   "version": "1.0.0",
-  "description": "MCP server for GitBook integration",
+  "description": "MCP server for Demos SDK integration",
   "main": "dist/index.js",
   "bin": {
-    "gitbook-mcp-server": "dist/index.js"
+    "demosdk-mcp-server": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",

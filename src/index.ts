@@ -59,6 +59,16 @@ class GitBookMCPServer {
                   type: 'string',
                   description: 'Search query',
                 },
+                limit: {
+                  type: 'number',
+                  description: 'Maximum number of results to return (default: 10, max: 50)',
+                  default: 10,
+                },
+                offset: {
+                  type: 'number',
+                  description: 'Number of results to skip for pagination (default: 0)',
+                  default: 0,
+                },
               },
               required: ['query'],
             },
@@ -72,6 +82,16 @@ class GitBookMCPServer {
                 path: {
                   type: 'string',
                   description: 'Page path (e.g., "/sdk/websdk")',
+                },
+                maxLength: {
+                  type: 'number',
+                  description: 'Maximum content length to return (default: 8000 chars)',
+                  default: 8000,
+                },
+                includeMetadata: {
+                  type: 'boolean',
+                  description: 'Include full metadata and code blocks (default: true)',
+                  default: true,
                 },
               },
               required: ['path'],
@@ -130,6 +150,44 @@ class GitBookMCPServer {
             },
           },
           {
+            name: `${this.domainInfo.toolPrefix}get_page_summary`,
+            description: `Get a lightweight summary of a specific page`,
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: {
+                  type: 'string',
+                  description: 'Page path (e.g., "/api/authentication")',
+                },
+              },
+              required: ['path'],
+            },
+          },
+          {
+            name: `${this.domainInfo.toolPrefix}get_page_chunk`,
+            description: `Get a specific chunk of page content for large pages`,
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: {
+                  type: 'string',
+                  description: 'Page path (e.g., "/api/authentication")',
+                },
+                startChar: {
+                  type: 'number',
+                  description: 'Starting character position (default: 0)',
+                  default: 0,
+                },
+                length: {
+                  type: 'number',
+                  description: 'Number of characters to return (default: 8000)',
+                  default: 8000,
+                },
+              },
+              required: ['path'],
+            },
+          },
+          {
             name: `${this.domainInfo.toolPrefix}get_markdown`,
             description: `Get the markdown content of a specific page with preserved formatting`,
             inputSchema: {
@@ -138,6 +196,11 @@ class GitBookMCPServer {
                 path: {
                   type: 'string',
                   description: 'Page path (e.g., "/api/authentication")',
+                },
+                maxLength: {
+                  type: 'number',
+                  description: 'Maximum content length to return (default: 8000 chars)',
+                  default: 8000,
                 },
               },
               required: ['path'],
@@ -249,9 +312,9 @@ class GitBookMCPServer {
         
         switch (baseName) {
           case 'search_content':
-            return await this.handleSearchContent(args as { query: string });
+            return await this.handleSearchContent(args as { query: string; limit?: number; offset?: number });
           case 'get_page':
-            return await this.handleGetPage(args as { path: string });
+            return await this.handleGetPage(args as { path: string; maxLength?: number; includeMetadata?: boolean });
           case 'list_sections':
             return await this.handleListSections();
           case 'get_section_pages':
@@ -262,8 +325,12 @@ class GitBookMCPServer {
             return await this.handleGetStatus();
           case 'get_code_blocks':
             return await this.handleGetCodeBlocks(args as { path: string });
+          case 'get_page_summary':
+            return await this.handleGetPageSummary(args as { path: string });
+          case 'get_page_chunk':
+            return await this.handleGetPageChunk(args as { path: string; startChar?: number; length?: number });
           case 'get_markdown':
-            return await this.handleGetMarkdown(args as { path: string });
+            return await this.handleGetMarkdown(args as { path: string; maxLength?: number });
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }
@@ -276,28 +343,98 @@ class GitBookMCPServer {
     });
   }
 
-  private async handleSearchContent(args: { query: string }) {
-    const results = await this.store.searchContent(args.query);
+  private async handleSearchContent(args: { query: string; limit?: number; offset?: number }) {
+    const limit = Math.min(args.limit || 10, 50); // Cap at 50 results
+    const offset = args.offset || 0;
+    
+    const allResults = await this.store.searchContent(args.query);
+    const paginatedResults = allResults.slice(offset, offset + limit);
+    
+    // Truncate snippets to keep response size manageable
+    const truncatedResults = paginatedResults.map(result => ({
+      ...result,
+      snippet: result.snippet.length > 300 ? result.snippet.substring(0, 300) + '...' : result.snippet,
+      page: {
+        path: result.page.path,
+        title: result.page.title,
+        section: result.page.section,
+        subsection: result.page.subsection,
+        url: result.page.url,
+        contentLength: result.page.content.length
+      }
+    }));
+    
+    const response = {
+      query: args.query,
+      pagination: {
+        limit,
+        offset,
+        total: allResults.length,
+        hasMore: offset + limit < allResults.length,
+        nextOffset: offset + limit < allResults.length ? offset + limit : null
+      },
+      results: truncatedResults
+    };
+    
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(results, null, 2),
+          text: JSON.stringify(response, null, 2),
         },
       ],
     };
   }
 
-  private async handleGetPage(args: { path: string }) {
+  private async handleGetPage(args: { path: string; maxLength?: number; includeMetadata?: boolean }) {
     const page = await this.store.getPage(args.path);
     if (!page) {
       throw new McpError(ErrorCode.InvalidRequest, `Page not found: ${args.path}`);
     }
+    
+    const maxLength = args.maxLength || 8000;
+    const includeMetadata = args.includeMetadata !== false;
+    
+    // Truncate content if it's too long
+    const content = page.content.length > maxLength 
+      ? page.content.substring(0, maxLength) + '...'
+      : page.content;
+    
+    const markdown = page.markdown.length > maxLength
+      ? page.markdown.substring(0, maxLength) + '...'
+      : page.markdown;
+    
+    const response: any = {
+      path: page.path,
+      title: page.title,
+      section: page.section,
+      subsection: page.subsection,
+      url: page.url,
+      lastUpdated: page.lastUpdated,
+      content,
+      markdown,
+      contentInfo: {
+        totalLength: page.content.length,
+        truncated: page.content.length > maxLength,
+        markdownLength: page.markdown.length,
+        markdownTruncated: page.markdown.length > maxLength
+      }
+    };
+    
+    if (includeMetadata) {
+      response.codeBlocks = page.codeBlocks;
+      response.contentHash = page.contentHash;
+      response.lastChecked = page.lastChecked;
+      response.searchableText = page.searchableText.length > 500 
+        ? page.searchableText.substring(0, 500) + '...' 
+        : page.searchableText;
+    }
+    
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(page, null, 2),
+          text: JSON.stringify(response, null, 2),
         },
       ],
     };
@@ -438,7 +575,7 @@ class GitBookMCPServer {
     };
   }
 
-  private async handleGetMarkdown(args: { path: string }) {
+  private async handleGetPageSummary(args: { path: string }) {
     if (!args.path || typeof args.path !== 'string') {
       throw new McpError(ErrorCode.InvalidRequest, 'Path parameter is required and must be a string');
     }
@@ -447,6 +584,93 @@ class GitBookMCPServer {
     if (!page) {
       throw new McpError(ErrorCode.InvalidRequest, `Page not found: ${args.path}`);
     }
+
+    // Create a lightweight summary
+    const summary = {
+      path: page.path,
+      title: page.title,
+      section: page.section,
+      subsection: page.subsection,
+      url: page.url,
+      lastUpdated: page.lastUpdated,
+      summary: {
+        contentLength: page.content.length,
+        markdownLength: page.markdown.length,
+        codeBlockCount: page.codeBlocks.length,
+        languages: [...new Set(page.codeBlocks.map(b => b.language))],
+        excerpt: page.content.substring(0, 300) + (page.content.length > 300 ? '...' : '')
+      }
+    };
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(summary, null, 2),
+        },
+      ],
+    };
+  }
+
+  private async handleGetPageChunk(args: { path: string; startChar?: number; length?: number }) {
+    if (!args.path || typeof args.path !== 'string') {
+      throw new McpError(ErrorCode.InvalidRequest, 'Path parameter is required and must be a string');
+    }
+
+    const page = await this.store.getPage(args.path);
+    if (!page) {
+      throw new McpError(ErrorCode.InvalidRequest, `Page not found: ${args.path}`);
+    }
+
+    const startChar = args.startChar || 0;
+    const length = args.length || 8000;
+    const endChar = startChar + length;
+
+    const contentChunk = page.content.substring(startChar, endChar);
+    const markdownChunk = page.markdown.substring(startChar, endChar);
+
+    const response = {
+      page: {
+        title: page.title,
+        path: page.path,
+        section: page.section,
+        totalLength: page.content.length
+      },
+      chunk: {
+        startChar,
+        endChar: Math.min(endChar, page.content.length),
+        length: contentChunk.length,
+        content: contentChunk,
+        markdown: markdownChunk,
+        hasMore: endChar < page.content.length,
+        nextStartChar: endChar < page.content.length ? endChar : null
+      }
+    };
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(response, null, 2),
+        },
+      ],
+    };
+  }
+
+  private async handleGetMarkdown(args: { path: string; maxLength?: number }) {
+    if (!args.path || typeof args.path !== 'string') {
+      throw new McpError(ErrorCode.InvalidRequest, 'Path parameter is required and must be a string');
+    }
+
+    const page = await this.store.getPage(args.path);
+    if (!page) {
+      throw new McpError(ErrorCode.InvalidRequest, `Page not found: ${args.path}`);
+    }
+
+    const maxLength = args.maxLength || 8000;
+    const markdown = page.markdown.length > maxLength
+      ? page.markdown.substring(0, maxLength) + '...'
+      : page.markdown;
 
     const response = {
       page: {
@@ -457,9 +681,10 @@ class GitBookMCPServer {
         url: page.url,
         lastUpdated: page.lastUpdated
       },
-      markdown: page.markdown,
+      markdown,
       metadata: {
-        markdownLength: page.markdown.length,
+        totalMarkdownLength: page.markdown.length,
+        truncated: page.markdown.length > maxLength,
         markdownLines: page.markdown.split('\n').length,
         hasCodeBlocks: page.codeBlocks.length > 0,
         codeBlockCount: page.codeBlocks.length
